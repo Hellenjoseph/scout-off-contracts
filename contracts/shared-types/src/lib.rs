@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contracttype, String};
+use soroban_sdk::{contracttype, Address, String, Vec};
 
 /// Four-tier progress level for a player profile
 #[contracttype]
@@ -32,6 +32,86 @@ impl ProgressLevel {
             ProgressLevel::EliteTier => None,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Cross-contract shared player and scout types (issue #1455)
+// Single authoritative definitions used by registration and its consumers
+// (verification, scout_access) to avoid silent drift from mirror types.
+// ---------------------------------------------------------------------------
+
+/// Basic player vitals stored on-chain.
+/// Shared across registration (producer) and verification/scout_access (consumers).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlayerVitals {
+    pub age: u32,
+    pub position: String,
+    pub region: String,
+    pub nationality: String,
+}
+
+/// Full on-chain player profile returned to callers.
+/// `level` is derived from the progress contract at read time — it is NOT
+/// persisted here.  `progress::get_level` is the single source of truth.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PlayerProfile {
+    pub player_id: u64,
+    pub wallet: Address,
+    pub vitals: PlayerVitals,
+    /// IPFS/Arweave CIDs for highlight reels and photos
+    pub ipfs_hashes: Vec<String>,
+    pub level: ProgressLevel,
+    pub registered_at: u64,
+    pub updated_at: u64,
+}
+
+/// Lightweight player view for scout discovery (no IPFS hashes or wallet).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct PlayerSummary {
+    pub player_id: u64,
+    pub vitals: PlayerVitals,
+    pub level: ProgressLevel,
+    pub updated_at: u64,
+}
+
+/// Internal on-chain player profile (no level — progress contract is the source of truth).
+/// Used by the registration contract for storage; not exposed directly to consumers.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct StoredPlayerProfile {
+    pub player_id: u64,
+    pub wallet: Address,
+    pub vitals: PlayerVitals,
+    /// IPFS/Arweave CIDs for highlight reels and photos
+    pub ipfs_hashes: Vec<String>,
+    pub registered_at: u64,
+    pub updated_at: u64,
+}
+
+/// Paginated response from filter_players.
+/// `next_cursor` is `0` when there are no more results.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct FilterResult {
+    pub profiles: Vec<PlayerProfile>,
+    /// Pass this value as `cursor` in the next call to continue pagination.
+    /// A value of `0` means there are no further results.
+    pub next_cursor: u64,
+}
+
+/// Scout profile stored on-chain.
+/// Shared across registration (producer) and scout_access (consumer).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct ScoutProfile {
+    pub scout_id: u64,
+    pub wallet: Address,
+    pub region: String,
+    pub verified: bool,
+    pub registered_at: u64,
 }
 
 /// Validate that a string is a plausible IPFS/Arweave CID.

@@ -6,7 +6,7 @@ mod types;
 use errors::ScoutChainError;
 use types::{
     ContractHealth, DataKey, FilterResult, PlayerProfile, PlayerSummary, PlayerVitals,
-    ProgressLevel, ScoutProfile,
+    ProgressLevel, ScoutProfile, StoredPlayerProfile,
 };
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
@@ -1839,5 +1839,91 @@ fn test_upgrade_preserves_admin() {
         let profile = client.get_player(&player_id);
         assert_eq!(profile.wallet, wallet);
         assert_eq!(profile.level, ProgressLevel::Unverified);
+    }
+
+    // -------------------------------------------------------------------------
+    // Issue #1455: Round-trip type compatibility guard
+    //
+    // These tests guard against silent ABI drift between the types defined in
+    // scoutchain-shared-types and any consumer that mirrors them. If a field is
+    // renamed or reordered in shared-types the tests below will fail to compile,
+    // making the breakage visible at build time rather than at runtime.
+    // -------------------------------------------------------------------------
+
+    /// Compile-time guard: PlayerVitals and PlayerProfile fields from
+    /// scoutchain-shared-types must remain layout-compatible with what
+    /// registration stores and returns. This test constructs both types
+    /// directly, asserting field names and types haven't drifted.
+    #[test]
+    fn test_player_profile_round_trip_type_compatibility() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        // Build a PlayerVitals using the shared-types definition re-exported
+        // through registration's types module. If field names change in
+        // shared-types this will fail to compile.
+        let vitals = PlayerVitals {
+            age: 22,
+            position: String::from_str(&env, "Forward"),
+            region: String::from_str(&env, "Africa"),
+            nationality: String::from_str(&env, "Nigerian"),
+        };
+
+        // Build a StoredPlayerProfile (internal type) — checks that the
+        // shared-types struct is structurally identical to what registration stores.
+        let wallet = Address::generate(&env);
+        let stored = StoredPlayerProfile {
+            player_id: 1u64,
+            wallet: wallet.clone(),
+            vitals: vitals.clone(),
+            ipfs_hashes: soroban_sdk::vec![
+                &env,
+                String::from_str(&env, "QmPK1s3pNYLi9ERiq3BDxKa4XosgWwFRQUydHUtz4YgpqB")
+            ],
+            registered_at: 1000u64,
+            updated_at: 1000u64,
+        };
+
+        // Build a PlayerProfile (the public return type) from the stored record.
+        let profile = PlayerProfile {
+            player_id: stored.player_id,
+            wallet: stored.wallet.clone(),
+            vitals: stored.vitals.clone(),
+            ipfs_hashes: stored.ipfs_hashes.clone(),
+            level: ProgressLevel::Unverified,
+            registered_at: stored.registered_at,
+            updated_at: stored.updated_at,
+        };
+
+        // Assert every field is accessible and has the expected value.
+        assert_eq!(profile.player_id, 1u64);
+        assert_eq!(profile.wallet, wallet);
+        assert_eq!(profile.vitals.age, 22u32);
+        assert_eq!(profile.vitals.position, String::from_str(&env, "Forward"));
+        assert_eq!(profile.vitals.region, String::from_str(&env, "Africa"));
+        assert_eq!(profile.vitals.nationality, String::from_str(&env, "Nigerian"));
+        assert_eq!(profile.level, ProgressLevel::Unverified);
+    }
+
+    /// Compile-time guard: ScoutProfile from scoutchain-shared-types must
+    /// remain layout-compatible with what registration stores and returns.
+    #[test]
+    fn test_scout_profile_round_trip_type_compatibility() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let wallet = Address::generate(&env);
+        let scout = ScoutProfile {
+            scout_id: 42u64,
+            wallet: wallet.clone(),
+            region: String::from_str(&env, "Europe"),
+            verified: false,
+            registered_at: 2000u64,
+        };
+
+        assert_eq!(scout.scout_id, 42u64);
+        assert_eq!(scout.wallet, wallet);
+        assert_eq!(scout.region, String::from_str(&env, "Europe"));
+        assert!(!scout.verified);
     }
 }
