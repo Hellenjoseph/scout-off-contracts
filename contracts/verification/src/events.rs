@@ -65,3 +65,92 @@ pub fn milestone_disputed(
         (),
     );
 }
+
+// ---------------------------------------------------------------------------
+// Config setter events (issue #1453)
+// Each setter emits a typed event with old and new values for off-chain indexing.
+// ---------------------------------------------------------------------------
+
+/// Emitted when diversity_config is updated by admin.
+pub fn diversity_config_updated(
+    env: &Env,
+    admin: &Address,
+    old_min_unique_regions: u32,
+    old_min_unique_validators: u32,
+    new_min_unique_regions: u32,
+    new_min_unique_validators: u32,
+) {
+    env.events().publish(
+        (Symbol::new(env, "diversity_config_updated"), admin.clone()),
+        (old_min_unique_regions, old_min_unique_validators, new_min_unique_regions, new_min_unique_validators),
+    );
+}
+
+/// Emitted when min_region_quorum is updated by admin.
+pub fn min_region_quorum_updated(
+    env: &Env,
+    admin: &Address,
+    old_quorum: u32,
+    new_quorum: u32,
+) {
+    env.events().publish(
+        (Symbol::new(env, "min_region_quorum_updated"), admin.clone()),
+        (old_quorum, new_quorum),
+    );
+}
+
+/// Emitted when milestone_threshold is updated by admin.
+pub fn milestone_threshold_updated(
+    env: &Env,
+    admin: &Address,
+    old_min_votes: u32,
+    old_approval_bps: u32,
+    new_min_votes: u32,
+    new_approval_bps: u32,
+) {
+    env.events().publish(
+        (Symbol::new(env, "milestone_threshold_updated"), admin.clone()),
+        (old_min_votes, old_approval_bps, new_min_votes, new_approval_bps),
+    );
+}
+
+/// Emitted when voting_window_secs is updated by admin.
+pub fn voting_window_secs_updated(
+    env: &Env,
+    admin: &Address,
+    old_secs: u64,
+    new_secs: u64,
+) {
+    env.events().publish(
+        (Symbol::new(env, "voting_window_secs_updated"), admin.clone()),
+        (old_secs, new_secs),
+    );
+}
+
+/// Emitted when reg_cooldown is updated by admin.
+pub fn reg_cooldown_updated(
+    env: &Env,
+    admin: &Address,
+    old_secs: u64,
+    new_secs: u64,
+) {
+    env.events().publish(
+        (Symbol::new(env, "reg_cooldown_updated"), admin.clone()),
+        (old_secs, new_secs),
+    );
+}
+
+/// Emitted when jury_config is updated by admin.
+pub fn jury_config_updated(
+    env: &Env,
+    admin: &Address,
+    old_jury_size: u32,
+    old_quorum: u32,
+    new_jury_size: u32,
+    new_quorum: u32,
+) {
+    env.events().publish(
+        (Symbol::new(env, "jury_config_updated"), admin.clone()),
+        (old_jury_size, old_quorum, new_jury_size, new_quorum),
+    );
+}

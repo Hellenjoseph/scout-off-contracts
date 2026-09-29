@@ -66,4 +66,68 @@ pub enum DataKey {
     ValidatorVector,
     TotalMilestoneCount,
     GlobalMilestoneIndex,
+    /// Stores a MilestoneDispute record keyed by (player_id, milestone_index).
+    MilestoneDispute(u64, u32),
+    /// Configuration keys for security-relevant parameters (issue #1453).
+    DiversityConfig,
+    MinRegionQuorum,
+    MilestoneThreshold,
+    VotingWindowSecs,
+    RegCooldown,
+    JuryConfig,
+}
+
+// ---------------------------------------------------------------------------
+// Configuration types (issue #1453)
+// ---------------------------------------------------------------------------
+
+/// Controls diversity requirements for milestone approval (e.g., minimum unique regions).
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct DiversityConfig {
+    /// Minimum number of distinct validator regions required for an approval.
+    pub min_unique_regions: u32,
+    /// Minimum number of distinct validators required for an approval.
+    pub min_unique_validators: u32,
+}
+
+/// Controls the minimum regional quorum needed for dispute resolution.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct MinRegionQuorum {
+    pub quorum: u32,
+}
+
+/// Threshold for milestone approval votes.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct MilestoneThreshold {
+    /// Minimum approval votes needed (absolute count).
+    pub min_votes: u32,
+    /// Minimum approval ratio in basis points (0–10000 = 0%–100%).
+    pub approval_bps: u32,
+}
+
+/// Voting window duration for disputes, in seconds.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct VotingWindowSecs {
+    pub secs: u64,
+}
+
+/// Cooldown period between player registrations, in seconds.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct RegCooldown {
+    pub secs: u64,
+}
+
+/// Jury configuration for dispute resolution.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct JuryConfig {
+    /// Number of validators drawn as jurors for each dispute.
+    pub jury_size: u32,
+    /// Minimum votes required from the jury to reach a verdict.
+    pub quorum: u32,
 }

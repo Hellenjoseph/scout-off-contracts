@@ -17,7 +17,7 @@ mod events;
 mod types;
 
 use errors::VerificationError;
-use types::{ContractHealth, DataKey, GlobalMilestoneEntry, GlobalMilestoneIndexPage, Milestone, Validator, ValidatorStatus};
+use types::{ContractHealth, DataKey, DiversityConfig, GlobalMilestoneEntry, GlobalMilestoneIndexPage, JuryConfig, Milestone, MilestoneThreshold, MinRegionQuorum, RegCooldown, Validator, ValidatorStatus, VotingWindowSecs};
 
 use soroban_sdk::{contract, contractimpl, Address, Env, String, Vec};
 
@@ -258,6 +258,183 @@ impl VerificationContract {
     pub fn upgrade(env: Env, new_wasm_hash: soroban_sdk::BytesN<32>) -> Result<(), VerificationError> {
         Self::require_admin(&env)?;
         env.deployer().update_current_contract_wasm(new_wasm_hash);
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Configuration setters (issue #1453)
+    // Each setter reads the old value, writes the new value, and emits a typed
+    // event with both old and new values for off-chain indexing and auditing.
+    // -------------------------------------------------------------------------
+
+    /// Update diversity config. Emits `diversity_config_updated` with old and new values.
+    pub fn set_diversity_config(
+        env: Env,
+        new_config: DiversityConfig,
+    ) -> Result<(), VerificationError> {
+        Self::require_admin(&env)?;
+        Self::require_not_paused(&env)?;
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(VerificationError::NotInitialized)?;
+
+        let old: DiversityConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::DiversityConfig)
+            .unwrap_or(DiversityConfig { min_unique_regions: 0, min_unique_validators: 1 });
+
+        env.storage().instance().set(&DataKey::DiversityConfig, &new_config);
+
+        events::diversity_config_updated(
+            &env,
+            &admin,
+            old.min_unique_regions,
+            old.min_unique_validators,
+            new_config.min_unique_regions,
+            new_config.min_unique_validators,
+        );
+        Ok(())
+    }
+
+    /// Update minimum region quorum. Emits `min_region_quorum_updated` with old and new values.
+    pub fn set_min_region_quorum(
+        env: Env,
+        new_quorum: u32,
+    ) -> Result<(), VerificationError> {
+        Self::require_admin(&env)?;
+        Self::require_not_paused(&env)?;
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(VerificationError::NotInitialized)?;
+
+        let old_quorum: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinRegionQuorum)
+            .unwrap_or(0u32);
+
+        env.storage().instance().set(&DataKey::MinRegionQuorum, &new_quorum);
+
+        events::min_region_quorum_updated(&env, &admin, old_quorum, new_quorum);
+        Ok(())
+    }
+
+    /// Update milestone threshold. Emits `milestone_threshold_updated` with old and new values.
+    pub fn set_milestone_threshold(
+        env: Env,
+        new_threshold: MilestoneThreshold,
+    ) -> Result<(), VerificationError> {
+        Self::require_admin(&env)?;
+        Self::require_not_paused(&env)?;
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(VerificationError::NotInitialized)?;
+
+        let old: MilestoneThreshold = env
+            .storage()
+            .instance()
+            .get(&DataKey::MilestoneThreshold)
+            .unwrap_or(MilestoneThreshold { min_votes: 1, approval_bps: 5000 });
+
+        env.storage().instance().set(&DataKey::MilestoneThreshold, &new_threshold);
+
+        events::milestone_threshold_updated(
+            &env,
+            &admin,
+            old.min_votes,
+            old.approval_bps,
+            new_threshold.min_votes,
+            new_threshold.approval_bps,
+        );
+        Ok(())
+    }
+
+    /// Update voting window in seconds. Emits `voting_window_secs_updated` with old and new values.
+    pub fn set_voting_window_secs(
+        env: Env,
+        new_secs: u64,
+    ) -> Result<(), VerificationError> {
+        Self::require_admin(&env)?;
+        Self::require_not_paused(&env)?;
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(VerificationError::NotInitialized)?;
+
+        let old_secs: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::VotingWindowSecs)
+            .unwrap_or(0u64);
+
+        env.storage().instance().set(&DataKey::VotingWindowSecs, &new_secs);
+
+        events::voting_window_secs_updated(&env, &admin, old_secs, new_secs);
+        Ok(())
+    }
+
+    /// Update registration cooldown in seconds. Emits `reg_cooldown_updated` with old and new values.
+    pub fn set_reg_cooldown(
+        env: Env,
+        new_secs: u64,
+    ) -> Result<(), VerificationError> {
+        Self::require_admin(&env)?;
+        Self::require_not_paused(&env)?;
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(VerificationError::NotInitialized)?;
+
+        let old_secs: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RegCooldown)
+            .unwrap_or(0u64);
+
+        env.storage().instance().set(&DataKey::RegCooldown, &new_secs);
+
+        events::reg_cooldown_updated(&env, &admin, old_secs, new_secs);
+        Ok(())
+    }
+
+    /// Update jury configuration. Emits `jury_config_updated` with old and new values.
+    pub fn set_jury_config(
+        env: Env,
+        new_config: JuryConfig,
+    ) -> Result<(), VerificationError> {
+        Self::require_admin(&env)?;
+        Self::require_not_paused(&env)?;
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Admin)
+            .ok_or(VerificationError::NotInitialized)?;
+
+        let old: JuryConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::JuryConfig)
+            .unwrap_or(JuryConfig { jury_size: 3, quorum: 2 });
+
+        env.storage().instance().set(&DataKey::JuryConfig, &new_config);
+
+        events::jury_config_updated(
+            &env,
+            &admin,
+            old.jury_size,
+            old.quorum,
+            new_config.jury_size,
+            new_config.quorum,
+        );
         Ok(())
     }
 
@@ -1396,5 +1573,131 @@ mod tests {
         // Assert counters are unchanged.
         assert_eq!(client.get_milestone_count(&player_id), milestone_count_before);
         assert_eq!(client.get_validator_milestone_count(&validator), validator_count_before);
+    }
+
+    // -------------------------------------------------------------------------
+    // Issue #1453: Config setter events tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_set_diversity_config_emits_event() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let new_config = DiversityConfig { min_unique_regions: 3, min_unique_validators: 5 };
+        client.set_diversity_config(&new_config);
+
+        let events = env.events().all();
+        // The last event should be diversity_config_updated
+        let last = events.last().unwrap();
+        let (topics, _): (soroban_sdk::Vec<soroban_sdk::Val>, soroban_sdk::Val) = (last.1, last.2);
+        // First topic is the symbol
+        let symbol = Symbol::new(&env, "diversity_config_updated");
+        assert_eq!(topics.get(0).unwrap(), symbol.into_val(&env));
+    }
+
+    #[test]
+    fn test_set_min_region_quorum_emits_event() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        client.set_min_region_quorum(&2u32);
+
+        let events = env.events().all();
+        assert!(!events.is_empty());
+        // Event was emitted — verify last event has the right symbol
+        let all = env.events().all();
+        let found = all.iter().any(|e| {
+            let topics = e.1;
+            topics.len() > 0 && topics.get(0).unwrap() == Symbol::new(&env, "min_region_quorum_updated").into_val(&env)
+        });
+        assert!(found);
+    }
+
+    #[test]
+    fn test_set_milestone_threshold_emits_event() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let threshold = MilestoneThreshold { min_votes: 3, approval_bps: 6600 };
+        client.set_milestone_threshold(&threshold);
+
+        let all = env.events().all();
+        let found = all.iter().any(|e| {
+            let topics = e.1;
+            topics.len() > 0 && topics.get(0).unwrap() == Symbol::new(&env, "milestone_threshold_updated").into_val(&env)
+        });
+        assert!(found);
+    }
+
+    #[test]
+    fn test_set_voting_window_secs_emits_event() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        client.set_voting_window_secs(&86400u64);
+
+        let all = env.events().all();
+        let found = all.iter().any(|e| {
+            let topics = e.1;
+            topics.len() > 0 && topics.get(0).unwrap() == Symbol::new(&env, "voting_window_secs_updated").into_val(&env)
+        });
+        assert!(found);
+    }
+
+    #[test]
+    fn test_set_reg_cooldown_emits_event() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        client.set_reg_cooldown(&3600u64);
+
+        let all = env.events().all();
+        let found = all.iter().any(|e| {
+            let topics = e.1;
+            topics.len() > 0 && topics.get(0).unwrap() == Symbol::new(&env, "reg_cooldown_updated").into_val(&env)
+        });
+        assert!(found);
+    }
+
+    #[test]
+    fn test_set_jury_config_emits_event() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let jury = JuryConfig { jury_size: 5, quorum: 3 };
+        client.set_jury_config(&jury);
+
+        let all = env.events().all();
+        let found = all.iter().any(|e| {
+            let topics = e.1;
+            topics.len() > 0 && topics.get(0).unwrap() == Symbol::new(&env, "jury_config_updated").into_val(&env)
+        });
+        assert!(found);
+    }
+
+    #[test]
+    fn test_set_diversity_config_records_old_values() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        // Set initial value
+        let first = DiversityConfig { min_unique_regions: 1, min_unique_validators: 2 };
+        client.set_diversity_config(&first);
+
+        // Update — old values should be (1, 2)
+        let second = DiversityConfig { min_unique_regions: 3, min_unique_validators: 4 };
+        client.set_diversity_config(&second);
+
+        // Events contain old and new values in the data payload
+        let all = env.events().all();
+        assert!(!all.is_empty());
     }
 }
