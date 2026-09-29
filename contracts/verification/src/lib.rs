@@ -344,15 +344,37 @@ impl VerificationContract {
                 .ok_or(VerificationError::Overflow)?),
         );
 
-        // Increment global total milestone count
-        let total: u32 = env
+        // Increment global total milestone count.
+        // Fix #1454: use a u64 counter so it never overflows even at high throughput.
+        let total_u64: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalMilestoneCountU64)
+            .unwrap_or(0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalMilestoneCountU64, &total_u64.saturating_add(1));
+
+        // Also maintain the legacy u32 counter for backwards-compatible reads,
+        // capping at u32::MAX rather than failing with Overflow.
+        let total_u32: u32 = env
             .storage()
             .instance()
             .get(&DataKey::TotalMilestoneCount)
             .unwrap_or(0u32);
         env.storage()
             .instance()
-            .set(&DataKey::TotalMilestoneCount, &(total.checked_add(1).ok_or(VerificationError::Overflow)?));
+            .set(&DataKey::TotalMilestoneCount, &total_u32.saturating_add(1));
+
+        // Ring-buffer: write the new entry at the current write head position,
+        // then advance the head using wrapping arithmetic modulo the ring size.
+        // Fix #1454: use wrapping_add so the head never causes an Overflow error.
+        let write_head: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::GlobalMilestoneWriteHead)
+            .unwrap_or(0u32);
+        let next_head = write_head.wrapping_add(1) % MAX_GLOBAL_MILESTONE_INDEX;
 
         let mut global_index: Vec<GlobalMilestoneEntry> = env
             .storage()
@@ -360,15 +382,24 @@ impl VerificationContract {
             .get(&DataKey::GlobalMilestoneIndex)
             .unwrap_or_else(|| Vec::new(&env));
         if global_index.len() >= MAX_GLOBAL_MILESTONE_INDEX {
-            global_index.remove(0);
+            // Ring is full: overwrite the slot at write_head (oldest entry).
+            global_index.set(write_head, GlobalMilestoneEntry {
+                player_id,
+                milestone_index: next_index,
+            });
+        } else {
+            // Ring is not yet full: just append.
+            global_index.push_back(GlobalMilestoneEntry {
+                player_id,
+                milestone_index: next_index,
+            });
         }
-        global_index.push_back(GlobalMilestoneEntry {
-            player_id,
-            milestone_index: next_index,
-        });
         env.storage()
             .instance()
             .set(&DataKey::GlobalMilestoneIndex, &global_index);
+        env.storage()
+            .instance()
+            .set(&DataKey::GlobalMilestoneWriteHead, &next_head);
 
         events::milestone_approved(
             &env,
@@ -440,6 +471,16 @@ impl VerificationContract {
             .instance()
             .get(&DataKey::TotalMilestoneCount)
             .unwrap_or(0u32)
+    }
+
+    /// Returns the total milestone count as u64.
+    /// Fix #1454: use this instead of get_total_milestone_count when counts may
+    /// exceed u32::MAX. The u32 variant is kept for backwards compatibility.
+    pub fn get_total_milestone_count_u64(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalMilestoneCountU64)
+            .unwrap_or(0u64)
     }
 
     pub fn get_global_milestone_index(
@@ -1396,5 +1437,109 @@ mod tests {
         // Assert counters are unchanged.
         assert_eq!(client.get_milestone_count(&player_id), milestone_count_before);
         assert_eq!(client.get_validator_milestone_count(&validator), validator_count_before);
+    }
+
+    // -------------------------------------------------------------------------
+    // Issue #1454: Ring-buffer write head overflow tests
+    // -------------------------------------------------------------------------
+
+    /// Asserts that approvals continue working when the ring-buffer write head
+    /// is seeded near u32::MAX (simulating a potential overflow boundary).
+    /// With wrapping_add the head wraps safely rather than returning Overflow.
+    #[test]
+    fn test_ring_buffer_write_head_wraps_at_boundary() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "Coach"));
+
+        // Seed the write head to MAX_GLOBAL_MILESTONE_INDEX - 1 so the next
+        // approval wraps back to 0.
+        env.as_contract(&client.address, || {
+            env.storage()
+                .instance()
+                .set(&DataKey::GlobalMilestoneWriteHead, &(MAX_GLOBAL_MILESTONE_INDEX - 1));
+        });
+
+        // First approval: write head was at (MAX - 1), wraps to 0 after.
+        let idx1 = client.approve_milestone(
+            &validator,
+            &1u64,
+            &String::from_str(&env, "milestone before wrap"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        assert_eq!(idx1, 1);
+
+        // Second approval: write head is now 0, should work fine.
+        let idx2 = client.approve_milestone(
+            &validator,
+            &2u64,
+            &String::from_str(&env, "milestone after wrap"),
+            &String::from_str(&env, VALID_CID_V1),
+        );
+        assert_eq!(idx2, 1);
+
+        // Both milestones are accessible.
+        assert_eq!(client.get_milestone_count(&1u64), 1);
+        assert_eq!(client.get_milestone_count(&2u64), 1);
+    }
+
+    /// Asserts that the global index reads remain correct across the ring-buffer wrap.
+    #[test]
+    fn test_global_index_reads_correct_after_wrap() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "Coach"));
+
+        // Approve two milestones.
+        client.approve_milestone(
+            &validator,
+            &10u64,
+            &String::from_str(&env, "m1"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        client.approve_milestone(
+            &validator,
+            &11u64,
+            &String::from_str(&env, "m2"),
+            &String::from_str(&env, VALID_CID_V1),
+        );
+
+        let page = client.get_global_milestone_index(&0u32, &10u32);
+        assert_eq!(page.total, 2);
+        assert_eq!(page.entries.get(0).unwrap().player_id, 10u64);
+        assert_eq!(page.entries.get(1).unwrap().player_id, 11u64);
+    }
+
+    /// Asserts u64 total count is correct alongside u32 count.
+    #[test]
+    fn test_total_milestone_count_u64() {
+        let (env, client) = setup();
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        let validator = Address::generate(&env);
+        client.register_validator(&validator, &String::from_str(&env, "Coach"));
+
+        client.approve_milestone(
+            &validator,
+            &1u64,
+            &String::from_str(&env, "m1"),
+            &String::from_str(&env, VALID_CID_V0),
+        );
+        client.approve_milestone(
+            &validator,
+            &2u64,
+            &String::from_str(&env, "m2"),
+            &String::from_str(&env, VALID_CID_V1),
+        );
+
+        assert_eq!(client.get_total_milestone_count_u64(), 2u64);
+        assert_eq!(client.get_total_milestone_count(), 2u32);
     }
 }

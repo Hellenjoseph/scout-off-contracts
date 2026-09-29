@@ -66,4 +66,11 @@ pub enum DataKey {
     ValidatorVector,
     TotalMilestoneCount,
     GlobalMilestoneIndex,
+    /// Ring-buffer write head (0..MAX_GLOBAL_MILESTONE_INDEX).
+    /// Stored modulo MAX_GLOBAL_MILESTONE_INDEX so it never overflows.
+    /// Fix #1454: use wrapping position instead of a monotonically increasing counter.
+    GlobalMilestoneWriteHead,
+    /// Separate u64 counter for total approvals ever (never wraps in practice).
+    /// Fix #1454: split from the u32 TotalMilestoneCount to avoid overflow.
+    TotalMilestoneCountU64,
 }
