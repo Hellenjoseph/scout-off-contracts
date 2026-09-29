@@ -51,6 +51,16 @@ pub struct GlobalMilestoneIndexPage {
     pub total: u32,
 }
 
+/// A player-submitted dispute record for a milestone (issue #471 / #1451).
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct MilestoneDispute {
+    pub player_id: u64,
+    pub milestone_index: u32,
+    pub reason: String,
+    pub disputed_at: u64,
+}
+
 #[contracttype]
 pub enum DataKey {
     Admin,
@@ -66,4 +76,6 @@ pub enum DataKey {
     ValidatorVector,
     TotalMilestoneCount,
     GlobalMilestoneIndex,
+    /// Stores a MilestoneDispute record keyed by (player_id, milestone_index).
+    MilestoneDispute(u64, u32),
 }
