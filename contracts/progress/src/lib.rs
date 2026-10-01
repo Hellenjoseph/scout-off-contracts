@@ -5,6 +5,9 @@ mod errors;
 mod events;
 mod types;
 
+use errors::ProgressError;
+use scoutchain_shared_types::{require_admin, ContractHealth, MigrationStatus, ProgressLevel};
+use types::{DataKey, ProgressEntry, CODE_SCHEMA_VERSION};
 pub use errors::ProgressError;
 use scoutchain_shared_types::{
     read_wiring_link, require_admin, safe_math::safe_add_u32, write_wiring_link, ContractHealth,
@@ -136,6 +139,12 @@ impl ProgressContract {
         );
         env.storage().instance().set(&DataKey::Initialized, &true);
         env.storage().instance().set(&DataKey::Paused, &false);
+        // A fresh contract is born on the current layout: there is no older
+        // state to migrate, so recording it here is what lets `migrate` be
+        // idempotent for a deployment that has never been upgraded.
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &CODE_SCHEMA_VERSION);
         Ok(())
     }
 
@@ -1189,6 +1198,71 @@ impl ProgressContract {
         }
     }
 
+    /// The storage layout version currently recorded in instance storage.
+    ///
+    /// Returns `0` when the key is absent, which is the pre-versioning layout:
+    /// a contract that has never been migrated reads as behind the code rather
+    /// than as current.
+    pub fn schema_version(env: Env) -> u32 {
+        Self::bump_instance_ttl(&env);
+        Self::read_schema_version(&env)
+    }
+
+    /// Migrate storage up to `target_version`, at most `max_items` per call.
+    ///
+    /// Bounded and resumable by design: a full history backfill can exceed what
+    /// one transaction can afford, so each call does a slice of the work and
+    /// records a cursor. Call it repeatedly until `complete` is true —
+    /// `scripts/upgrade.sh` drives exactly that loop and then verifies through
+    /// `schema_version`.
+    ///
+    /// Idempotent in both directions. Calling it when storage is already at
+    /// `target_version` reports `complete` and rewrites nothing, so a retried
+    /// upgrade script is harmless. Calling it with a target below the stored
+    /// version is refused rather than rolled back, because downgrading a layout
+    /// would discard data the current code expects.
+    pub fn migrate(
+        env: Env,
+        target_version: u32,
+        max_items: u32,
+    ) -> Result<MigrationStatus, ProgressError> {
+        Self::bump_instance_ttl(&env);
+        require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
+
+        let from = Self::read_schema_version(&env);
+        if from > target_version {
+            return Err(ProgressError::SchemaVersionTooNew);
+        }
+        if target_version > CODE_SCHEMA_VERSION {
+            return Err(ProgressError::UnknownSchemaTarget);
+        }
+
+        if from == target_version {
+            // Nothing to do. Returning the current cursor keeps the response
+            // shape identical whether or not work happened, so a caller can
+            // loop on `complete` without special-casing the first call.
+            return Ok(Self::migration_status(&env, from, target_version));
+        }
+
+        // v0 -> v1: backfill `HistoryVec` for players registered before that
+        // key existed. `HistoryEntry(player, idx)` is already correct, so the
+        // migration is a copy rather than a recomputation.
+        if from < 1 && target_version >= 1 {
+            Self::backfill_history_vec(&env, max_items);
+        }
+
+        let current = target_version;
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &current);
+
+        if current >= 1 {
+            events::schema_migrated(&env, from, current);
+        }
+
+        Ok(Self::migration_status(&env, from, current))
+    }
+
     /// Returns the deployed crate version (from Cargo.toml at build time).
     pub fn version(env: Env) -> String {
         String::from_str(&env, CONTRACT_VERSION)
@@ -1237,6 +1311,102 @@ impl ProgressContract {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_TTL_MIN, INSTANCE_TTL_MAX);
+    }
+
+    /// Stored layout version, treating an absent key as the pre-versioning
+    /// layout rather than as an error.
+    fn read_schema_version(env: &Env) -> u32 {
+        env.storage()
+            .instance()
+            .get::<DataKey, u32>(&DataKey::SchemaVersion)
+            .unwrap_or(0u32)
+    }
+
+    fn read_cursor(env: &Env) -> u64 {
+        env.storage()
+            .persistent()
+            .get::<DataKey, u64>(&DataKey::MigrationCursor(0))
+            .unwrap_or(0u64)
+    }
+
+    fn read_processed(env: &Env) -> u32 {
+        env.storage()
+            .persistent()
+            .get::<DataKey, u32>(&DataKey::MigrationProcessed)
+            .unwrap_or(0u32)
+    }
+
+    fn migration_status(env: &Env, from: u32, to: u32) -> MigrationStatus {
+        let current = Self::read_schema_version(env);
+        MigrationStatus {
+            from,
+            to,
+            code: CODE_SCHEMA_VERSION,
+            current,
+            pending: current < CODE_SCHEMA_VERSION,
+            complete: current >= CODE_SCHEMA_VERSION,
+            last_visited_id: Self::read_cursor(env),
+            processed: Self::read_processed(env),
+        }
+    }
+
+    /// Walk player ids from just past the cursor until `max_items` ids have been
+    /// considered, backfilling [`DataKey::HistoryVec`] for each player that has
+    /// history but no vector yet.
+    ///
+    /// The cursor advances for every id visited, including ones with nothing to
+    /// migrate, so a player that needed nothing is not reconsidered on the next
+    /// call. That is what makes repeated calls terminate.
+    fn backfill_history_vec(env: &Env, max_items: u32) {
+        // `max_items` of zero would make no progress while still advancing the
+        // stored version, which would silently mark the migration done. Treat
+        // it as a no-op instead, so the caller loops again.
+        if max_items == 0 {
+            return;
+        }
+
+        let mut cursor = Self::read_cursor(env);
+        let mut processed = Self::read_processed(env);
+
+        for _ in 0..max_items {
+            cursor = cursor.saturating_add(1);
+
+            let counter_key = DataKey::HistoryCounter(cursor);
+            let count: u32 = env
+                .storage()
+                .persistent()
+                .get(&counter_key)
+                .unwrap_or(0u32);
+            let vec_key = DataKey::HistoryVec(cursor);
+
+            if count > 0 && !env.storage().persistent().has(&vec_key) {
+                let mut history: Vec<ProgressEntry> = Vec::new(env);
+                for index in 1..=count {
+                    if let Some(entry) = env
+                        .storage()
+                        .persistent()
+                        .get::<DataKey, ProgressEntry>(&DataKey::HistoryEntry(cursor, index))
+                    {
+                        history.push_back(entry);
+                    }
+                }
+                env.storage().persistent().set(&vec_key, &history);
+                env.storage().persistent().extend_ttl(
+                    &vec_key,
+                    PERSISTENT_TTL_MIN,
+                    PERSISTENT_TTL_MAX,
+                );
+            }
+
+            env.storage()
+                .persistent()
+                .set(&DataKey::MigrationCursor(0), &cursor);
+            processed = processed.saturating_add(1);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::MigrationProcessed, &processed);
     }
 
     fn get_current_level(env: &Env, player_id: u64) -> ProgressLevel {

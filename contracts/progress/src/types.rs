@@ -144,6 +144,18 @@ pub enum DataKey {
     /// The `Address` of the scout_access contract. Whitelisted as a secondary
     /// authorised caller of `advance_level` (for trial-offer Level-3 advances).
     ScoutAccessContract,
+    /// The storage layout version this contract is currently running. Absent
+    /// means version 0 — the pre-versioning layout — so a contract that has
+    /// never been migrated reads as "behind the code" rather than "current".
+    SchemaVersion,
+    /// How far a resumable migration has progressed. Stores the highest
+    /// `player_id` the cursor has already visited, so a second `migrate` call
+    /// resumes instead of re-scanning from zero. Absent means "not started".
+    MigrationCursor(u64),
+    /// Total items rewritten by a migration across all calls. Diagnostic only:
+    /// it lets an operator confirm progress across several `migrate` calls
+    /// without reading the cursor's implied position.
+    MigrationProcessed,
     /// The current Merkle commitment root over a player's full
     /// [`ProgressEntry`] history (an RFC 6962-style Merkle Tree Hash — see
     /// `record_progress_entry`'s doc comment for the construction). Updated

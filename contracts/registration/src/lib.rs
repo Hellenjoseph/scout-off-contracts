@@ -77,8 +77,11 @@ const INSTANCE_TTL_MAX: u32 = 500;
 // and must live as long as the profiles they index.
 const PERSISTENT_TTL_MIN: u32 = 500;
 const PERSISTENT_TTL_MAX: u32 = 518_400;
-const ADMIN_BUMP_LEDGERS: u32 = 518_400;
 
+// Admin key TTL — kept equal to PERSISTENT_TTL_MAX so the admin address lives
+// as long as the identity data it governs and cannot lapse out of storage
+// between privileged calls.
+const ADMIN_BUMP_LEDGERS: u32 = 518_400;
 /// Default registration cooldown: 24 hours in seconds.
 /// Applies to `register_player` and `register_scout`.
 /// Configurable by admin via `set_reg_cooldown`.  0 disables the cooldown.

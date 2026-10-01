@@ -2104,6 +2104,29 @@ stellar contract invoke --id $VERIFICATION_CONTRACT_ID \
 
 ---
 
+#### `schema_version() -> u32`
+
+Return the storage layout version currently recorded in instance storage.
+Returns `0` when the key is absent, which is the pre-versioning layout: a
+contract that has never been migrated reads as behind the code rather than as
+current.
+
+`health()` is deliberately unchanged — `ContractHealth` is shared across all
+four contracts, so adding a field there would break every caller. Migration
+progress is reported by `migrate()` instead.
+
+| | |
+|---|---|
+| **Auth** | None |
+| **Errors** | None |
+
+```bash
+stellar contract invoke --id $PROGRESS_CONTRACT_ID -- schema_version
+```
+
+---
+
+#### `set_verification_contract(addr: Address) -> Result<(), ProgressError>`
 #### `get_global_milestone_index(offset: u32, limit: u32) -> GlobalMilestoneIndexPage`
 
 Return a page of the global milestone index — a rolling log of the most
@@ -3506,6 +3529,35 @@ see [`docs/WIRING_REGISTRY_DESIGN.md`](WIRING_REGISTRY_DESIGN.md).
 | **Errors** | None |
 
 ```bash
+stellar contract invoke --id $PROGRESS_CONTRACT_ID \
+    -- get_progress_history_page --player_id 1 --offset 0 --limit 10
+```
+
+---
+
+#### `migrate(target_version: u32, max_items: u32) -> Result<MigrationStatus, ProgressError>`
+
+Migrate storage up to `target_version`, doing at most `max_items` units of work
+per call. Admin only. See [VERSIONING.md](VERSIONING.md) for the full
+procedure.
+
+`upgrade()` replaces the WASM immediately and Soroban gives a contract no hook
+that runs afterwards, so storage is still on the old layout when it returns.
+Call `migrate` in a loop until `complete` is true.
+
+| | |
+|---|---|
+| **Auth** | Admin must sign |
+| **Errors** | `NotInitialized` · `Unauthorized` · `SchemaVersionTooNew` · `UnknownSchemaTarget` |
+| **Returns** | `MigrationStatus { from, to, code, current, pending, complete, last_visited_id, processed }` |
+
+Calling it when storage is already at `target_version` is a no-op that reports
+`complete` and rewrites nothing, so a retried upgrade script is harmless. A
+target below the stored version is refused rather than rolled back, because
+downgrading a layout would discard data the current code expects.
+
+```bash
+stellar contract invoke --id $PROGRESS_CONTRACT_ID -- migrate -- 1 -- 100
 stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
   -- get_wiring_state
 ```
@@ -3577,6 +3629,8 @@ Activate a pending fee configuration proposal after the 7-day delay has elapsed.
 | **Emits** | `fee_config_updated` with `(admin, old_config, new_config)` |
 
 ```bash
+stellar contract invoke --id $PROGRESS_CONTRACT_ID \
+    -- get_history_since --player_id 1 --since_timestamp 1700000000
 stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
   -- activate_fee_config
 ```
@@ -3604,6 +3658,18 @@ stellar contract invoke --id $SCOUT_ACCESS_CONTRACT_ID \
   -- propose_fee_config \
   --fee_config '{"contact_fee_stroops":300000,"basic_sub_stroops":2000000,"pro_sub_stroops":6000000,"elite_sub_stroops":15000000,"sub_duration_secs":2592000,"pro_contact_limit":20}'
 ```
+
+### Events
+
+| Event | Topics | Data | Description |
+|-------|--------|------|-------------|
+| `progress_updated` | event_name, updated_by (Address) | player_id (u64), old_level, new_level | Player advances one tier |
+| `player_level_reset` | event_name, admin (Address) | player_id (u64), old_level, new_level | Admin resets a player's level |
+| `admin_transfer_proposed` | event_name, old_admin (Address) | new_admin (Address) | Admin replacement proposed |
+| `admin_transferred` | event_name, old_admin (Address) | new_admin (Address) | Admin rights rotated |
+| `contract_paused` | event_name, admin (Address) | () | Circuit breaker engaged |
+| `contract_unpaused` | event_name, admin (Address) | () | Circuit breaker released |
+| `schema_migrated` | event_name | from (u32), to (u32) | Storage brought up to the running layout |
 
 ---
 
@@ -5341,6 +5407,8 @@ pub struct TrialOffer {
 | 9 | `RegistrationCallFailed` | Cross-contract call to the registration contract failed when syncing a player's level |
 | 9 | `RegistrationCallFailed` | Cross-contract call to registration contract failed when syncing player level |
 | 10 | `PendingAdminNotSet` | `accept_admin` called without a pending proposal |
+| 11 | `SchemaVersionTooNew` | `migrate` target below the stored version |
+| 12 | `UnknownSchemaTarget` | `migrate` target above the compiled layout version |
 | 11 | `MigrationNotActive` | Seeding attempted while the migration window is closed; call `open_migration_window` first |
 | 12 | `HistoryAlreadyExists` | A `HistoryEntry` already exists at `(player_id, history_index)` with different content (identical replays are no-ops) |
 | 13 | `MerkleRootMismatch` | Merkle root recomputed from the seeded history does not match the caller-supplied `expected_root`; the transaction is rolled back |
