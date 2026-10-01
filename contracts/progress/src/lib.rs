@@ -302,6 +302,14 @@ impl ProgressContract {
         Self::require_initialized(&env)?;
         let admin = require_admin(&env, &DataKey::Admin, ADMIN_BUMP_LEDGERS)?;
 
+        // Require a wired registration contract to validate player existence.
+        // If not configured, fail closed with a typed error.
+        let reg_contract: Option<Address> = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::RegistrationContract);
+        let reg_contract = reg_contract.ok_or(ProgressError::RegistrationNotConfigured)?;
+
         let old_level = Self::get_current_level(&env, player_id);
 
         // Guard: reject no-op resets so history stays meaningful and the
@@ -338,6 +346,7 @@ impl ProgressContract {
                 Ok(Ok(())) => {}
                 _ => return Err(ProgressError::RegistrationCallFailed),
             }
+            _ => return Err(ProgressError::RegistrationCallFailed),
         }
 
         events::player_level_reset(&env, &admin, player_id, &old_level, &target_level);
@@ -411,6 +420,14 @@ impl ProgressContract {
             }
         }
 
+        // Require a wired registration contract to validate player existence.
+        // If not configured, fail closed with a typed error.
+        let reg_contract: Option<Address> = env
+            .storage()
+            .instance()
+            .get::<DataKey, Address>(&DataKey::RegistrationContract);
+        let reg_contract = reg_contract.ok_or(ProgressError::RegistrationNotConfigured)?;
+
         let current = Self::get_current_level(&env, player_id);
         let new_level = current.next().ok_or(ProgressError::AlreadyAtMaxLevel)?;
 
@@ -446,6 +463,7 @@ impl ProgressContract {
                 Ok(Ok(())) => {}
                 _ => return Err(ProgressError::RegistrationCallFailed),
             }
+            _ => return Err(ProgressError::RegistrationCallFailed),
         }
 
         // All storage writes are complete — emit the event last.
